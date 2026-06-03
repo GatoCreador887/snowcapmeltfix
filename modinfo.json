@@ -1,0 +1,13 @@
+{
+  "type": "code",
+  "modid": "snowcapmeltfix",
+  "name": "Snow Cap Melt Fix",
+  "authors": ["vostSive"],
+  "description": "Stops mountain snow caps from melting.",
+  "version": "1.0.0",
+  "side": "Server",
+  "dependencies": {
+    "game": "*",
+    "survival": "*"
+  }
+}
