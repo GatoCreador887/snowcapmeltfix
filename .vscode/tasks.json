@@ -4,7 +4,7 @@
         {
             "label": "run",
             "type": "shell",
-            "command": "dotnet build && \"${env:VINTAGE_STORY}/Vintagestory\" --tracelog --dataPath \"${workspaceFolder}/run\" --addModPath \"${workspaceFolder}/SnowCapMeltFix/bin/Debug/Mods\"",
+            "command": "dotnet build && \"${env:VINTAGE_STORY}/Vintagestory\" --tracelog --dataPath \"${workspaceFolder}/run\" --addModPath \"${workspaceFolder}/bin/Debug/Mods\"",
             "problemMatcher": [],
             "group": {
                 "kind": "build",
