@@ -193,7 +193,7 @@ public class SnowCapMeltFixModSystem : ModSystem
             baseModifier = original;
         }
 
-        if (vsApi.World.Config.GetBool("snowcapmeltfixAltitudeTemperatureAdjustmentRate"))
+        if (vsApi.World.Config.GetBool("snowcapmeltfixScaleAltitudeTemperatureAdjustment"))
         {
             const int defaultWorldAltitude = 256 - 110;
             var worldAltitude = vsApi.World.BlockAccessor.MapSizeY - vsApi.World.SeaLevel;
