@@ -1,0 +1,7 @@
+{
+    "worldconfig-category-snowcapmeltfix": "Snow cap melt fix",
+    "worldattribute-snowcapmeltfixScaleAltitudeTemperatureAdjustment": "Scale altitude temperature adjustment",
+    "worldattribute-snowcapmeltfixScaleAltitudeTemperatureAdjustment-desc": "Enable to make altitude temperature adjustment scaled by world height. Otherwise, vanilla behavior will apply, in which altitude temperature adjustment is the same regardless of world height, meaning that tall worlds will have massive snow caps and short worlds will have none.",
+    "worldattribute-snowcapmeltfixAltitudeTemperatureAdjustmentRate": "Altitude temperature adjustment rate",
+    "worldattribute-snowcapmeltfixAltitudeTemperatureAdjustmentRate-desc": "The unscaled altitude temperature adjustment rate, in blocks per °C. Vanilla is 6.375. This can be set to a negative value if you want higher altitudes to be warmer instead of colder."
+}

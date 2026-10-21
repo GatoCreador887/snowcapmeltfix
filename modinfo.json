@@ -4,7 +4,7 @@
   "name": "Snow Cap Melt Fix",
   "authors": ["vostSive"],
   "description": "Stops mountain snow caps from melting.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "side": "Universal",
   "requiredOnClient": false,
   "dependencies": {

@@ -21,10 +21,7 @@ public class SnowCapMeltFixModSystem : ModSystem
     private static ICoreAPI vsApi;
     private static ModConfig mainConfig;
     private static ClientModConfig clientConfig;
-    private static WorldData worldData;
-    private static string worldDataSyncChannel;
 
-    private const int saveDataVersion = 0;
     private const string patchCategoryServerOnly = "serveronly";
     private const string patchCategoryClientOnly = "clientonly";
 
@@ -46,39 +43,28 @@ public class SnowCapMeltFixModSystem : ModSystem
         api.StoreModConfig(mainConfig, mainConfigFile);
         harmony = new Harmony(Mod.Info.ModID);
         harmony.PatchAllUncategorized();
-        worldDataSyncChannel = $"{Mod.Info.ModID}_worlddatasync";
-        api.Network.RegisterChannel(worldDataSyncChannel).RegisterMessageType<WorldData>();
+
+        if (api.ModLoader.IsModEnabled("terrainslabs"))
+        {
+            // The exact same patch method works for the terrain slabs snow slab
+            harmony.Patch(AccessTools.Method(AccessTools.TypeByName("TerrainSlabs.Source.Blocks.BlockSnowSlab"), "GetSnowCoveredVariant"), prefix: new(StopSnowBlockDeletion));
+        }
     }
 
     public override void StartServerSide(ICoreServerAPI api)
     {
         harmony.PatchCategory(patchCategoryServerOnly);
-        api.Event.SaveGameCreated += () =>
-        {
-            worldData = new(saveDataVersion, mainConfig.ScaleAltitudeTemperatureAdjustment, mainConfig.AltitudeTemperatureAdjustmentRate / Climate.TemperatureScaleConversion);
-            api.WorldManager.SaveGame.StoreData($"{Mod.Info.ModID}", SerializerUtil.Serialize(worldData));
-            api.Logger.Event($"Saved {Mod.Info.ModID} data for new save game");
-        };
         api.Event.SaveGameLoaded += () =>
         {
             var data = api.WorldManager.SaveGame.GetData($"{Mod.Info.ModID}");
 
             if (data != null)
             {
-                worldData = SerializerUtil.Deserialize<WorldData>(data);
-                api.Logger.Event($"Loaded {Mod.Info.ModID} data of version {worldData.dataVersion}");
-            }
-            else
-            {
-                worldData = null;
-                api.Logger.Notification($"Loaded save game does not have {Mod.Info.ModID} data");
-            }
-        };
-        api.Event.PlayerNowPlaying += p =>
-        {
-            if (worldData != null)
-            {
-                api.Network.GetChannel(worldDataSyncChannel).SendPacket(worldData, p);
+                var worldData = SerializerUtil.Deserialize<WorldData>(data);
+                api.Logger.Event($"Loaded {Mod.Info.ModID} data of version {worldData.dataVersion}, converting to world config");
+                api.World.Config.SetBool("snowcapmeltfixScaleAltitudeTemperatureAdjustment", worldData.scaleAltitudeTemperatureAdjustment);
+                api.World.Config.SetString("snowcapmeltfixAltitudeTemperatureAdjustmentRate", worldData.altitudeTemperatureAdjustmentRate.ToString());
+                ((SaveGame)api.WorldManager.SaveGame).ModData.Remove(Mod.Info.ModID);
             }
         };
     }
@@ -99,17 +85,11 @@ public class SnowCapMeltFixModSystem : ModSystem
         clientConfig ??= new();
         api.StoreModConfig(clientConfig, clientConfigFile);
         harmony.PatchCategory(patchCategoryClientOnly);
-        api.Network.GetChannel(worldDataSyncChannel).SetMessageHandler<WorldData>(m =>
-        {
-            // No point overwriting this in singleplayer
-            worldData ??= m;
-        });
     }
 
     public override void Dispose()
     {
         harmony?.UnpatchAll(Mod.Info.ModID);
-        worldData = null;
     }
 
     [HarmonyPrefix]
@@ -120,106 +100,35 @@ public class SnowCapMeltFixModSystem : ModSystem
         return false;
     }
 
-    [HarmonyTranspiler]
-    [HarmonyPatch(typeof(WeatherSimulationRegion), nameof(WeatherSimulationRegion.UpdateSnowAccumulation))]
-    public static IEnumerable<CodeInstruction> SimRegionChangeSnowAccumVerticalResolution(IEnumerable<CodeInstruction> instructions)
-    {
-        List<CodeInstruction> codes = [.. instructions];
-        int occurrences = 0;
-        var yFound = false;
-
-        for (int i = 0; i < codes.Count; ++i)
-        {
-            if (occurrences < 5 && codes[i].LoadsField(AccessTools.Field(typeof(WeatherSimulationRegion), "snowAccumResolution")))
-            {
-                ++occurrences;
-
-                if (occurrences == 2 || occurrences == 5)
-                {
-                    codes[i] = new(OpCodes.Call, AccessTools.Method(typeof(SnowCapMeltFixModSystem), nameof(GetSnowAccumVerticalResolution)));
-                }
-            }
-            else if (!yFound && codes[i].opcode == OpCodes.Stloc_S && ((LocalBuilder)codes[i].operand).LocalIndex == 7)
-            {
-                for (int j = i; j >= 0; --j)
-                {
-                    if (codes[j].opcode == OpCodes.Ldloc_S && ((LocalBuilder)codes[i].operand).LocalIndex == 5)
-                    {
-                        yFound = true;
-                        // Keep the first instruction in the block, as it is the target of a jump and provides one of the arguments for the injected method call anyway
-                        ++j;
-                        codes.RemoveRange(j, i - j);
-                        List<CodeInstruction> replacement =
-                        [
-                                new(OpCodes.Ldarg_0),
-                                new(OpCodes.Ldfld, AccessTools.Field(typeof(WeatherSimulationRegion), "ws")),
-                                new(OpCodes.Call, AccessTools.Method(typeof(SnowCapMeltFixModSystem), nameof(SnapshotYToBlockY)))
-                        ];
-                        codes.InsertRange(j, replacement);
-                        i = j + replacement.Count;
-                        break;
-                    }
-                }
-            }
-
-            if (occurrences >= 5 && yFound)
-            {
-                break;
-            }
-        }
-
-        return codes.AsEnumerable();
-    }
-
     [HarmonyPostfix]
     [HarmonyPatch(typeof(WeatherSimulationRegion), "FromBytes")]
     public static void ClearSnowAccumSnapshotsOnResChange(WeatherSimulationRegion __instance, byte[] data)
     {
-        var lastElementAdded = __instance.SnowAccumSnapshots.EndPosition - 1;
+        // This is here to reset the stored snow accum snapshots if they are of the wrong size,
+        // because previous versions of the mod allowed changing the height of snow accum snapshots
+        var clear = false;
+        var length = __instance.SnowAccumSnapshots.Length;
+        var index = __instance.SnowAccumSnapshots.EndPosition;
 
-        if (lastElementAdded < 0)
+        // foreach doesn't work on RingArray for some reason, so the classic method is used
+        while (length-- > 0)
         {
-            lastElementAdded += __instance.SnowAccumSnapshots.Length;
+            var snapshot = __instance.SnowAccumSnapshots[index];
+            index = (index + 1) % __instance.SnowAccumSnapshots.Length;
+
+            if (snapshot != null && snapshot.SnowAccumulationByRegionCorner.Data.Length != WeatherSimulationRegion.snowAccumResolution * WeatherSimulationRegion.snowAccumResolution * WeatherSimulationRegion.snowAccumResolution)
+            {
+                clear = true;
+                break;
+            }
         }
 
-        if (__instance.SnowAccumSnapshots[lastElementAdded]?.SnowAccumulationByRegionCorner?.Height != mainConfig.SnowAccumVerticalResolution)
+        if (clear)
         {
             // Just clearing the array should be fine, as the array is clear when starting a new world anyway
             __instance.SnowAccumSnapshots.Clear();
+            vsApi.Logger.Event($"Malformed snow accum snapshot found in weather simulation region {__instance.regionX}/{__instance.regionZ}. Snow accum snapshots cleared for this region");
         }
-    }
-
-    [HarmonyTranspiler]
-    [HarmonyPatch(typeof(WeatherSimulationSnowAccum), "GetSnowUpdate")]
-    public static IEnumerable<CodeInstruction> SimSnowAccumChangeSnowAccumVerticalResolution(IEnumerable<CodeInstruction> instructions)
-    {
-        int occurrences = 0;
-
-        foreach (var code in instructions)
-        {
-            if (occurrences < 2 && code.opcode == OpCodes.Ldloc_2)
-            {
-                ++occurrences;
-
-                if (occurrences == 2)
-                {
-                    yield return new(OpCodes.Call, AccessTools.Method(typeof(SnowCapMeltFixModSystem), nameof(GetSnowAccumVerticalResolution)));
-                    continue;
-                }
-            }
-
-            yield return code;
-        }
-    }
-
-    public static int GetSnowAccumVerticalResolution()
-    {
-        return mainConfig.SnowAccumVerticalResolution;
-    }
-
-    public static int SnapshotYToBlockY(int snapshotY, WeatherSystemBase ws)
-    {
-        return (int)GameMath.Lerp(ws.api.World.SeaLevel, ws.api.World.BlockAccessor.MapSizeY - 1, (float)snapshotY / (mainConfig.SnowAccumVerticalResolution - 1));
     }
 
     [HarmonyTranspiler]
@@ -275,14 +184,16 @@ public class SnowCapMeltFixModSystem : ModSystem
 
     public static float AdjustAltitudeTemperatureModifier(float original)
     {
-        return worldData == null ? original : GetTransformedAltitudeTemperatureModifier();
-    }
+        if (float.TryParse(vsApi.World.Config.GetString("snowcapmeltfixAltitudeTemperatureAdjustmentRate"), out var baseModifier))
+        {
+            baseModifier /= Climate.TemperatureScaleConversion;
+        }
+        else
+        {
+            baseModifier = original;
+        }
 
-    public static float GetTransformedAltitudeTemperatureModifier()
-    {
-        var baseModifier = worldData.altitudeTemperatureAdjustmentRate;
-
-        if (worldData.scaleAltitudeTemperatureAdjustment)
+        if (vsApi.World.Config.GetBool("snowcapmeltfixAltitudeTemperatureAdjustmentRate"))
         {
             const int defaultWorldAltitude = 256 - 110;
             var worldAltitude = vsApi.World.BlockAccessor.MapSizeY - vsApi.World.SeaLevel;
@@ -391,7 +302,6 @@ public class SnowCapMeltFixModSystem : ModSystem
 
     public class ModConfig
     {
-        public int SnowAccumVerticalResolution { get; set; } = 2;
         public bool ScaleAltitudeTemperatureAdjustment { get; set; } = false;
         public float AltitudeTemperatureAdjustmentRate { get; set; } = 6.375f;
     }
@@ -401,6 +311,7 @@ public class SnowCapMeltFixModSystem : ModSystem
         public bool PatchColormapShader { get; set; } = true;
     }
 
+    // Included for compatibility with v1.0.1 and earlier, which didn't use the world config system
     [ProtoContract]
     public class WorldData
     {

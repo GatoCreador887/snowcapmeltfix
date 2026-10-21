@@ -1,0 +1,19 @@
+{
+    "playstyles": [],
+    "worldConfigAttributes": [
+        {
+            "category": "snowcapmeltfix",
+            "code": "snowcapmeltfixScaleAltitudeTemperatureAdjustment",
+            "dataType": "bool",
+            "default": "false",
+            "onlyDuringWorldCreate": true
+        },
+        {
+            "category": "snowcapmeltfix",
+            "code": "snowcapmeltfixAltitudeTemperatureAdjustmentRate",
+            "dataType": "string",
+            "default": "6.375",
+            "onlyDuringWorldCreate": true
+        }
+    ]
+}
